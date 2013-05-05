@@ -13,6 +13,8 @@ my $htmlToText = "";
 my $backupLocation = "";
 my $octopressLocation = "";
 
+my $DEBUG = 0;
+
 my $xml = new XML::Simple;
 
 sub parseFile {
@@ -22,7 +24,6 @@ sub parseFile {
   chomp($tmpFile);
 
   open my $tmpHandle, "+>", $tmpFile or die "$!";
-
   open my $fileHandle, "<", $file or die "$!";
 
   my $content = "<item xmlns:dc=\"http://www.w3.org\" xmlns:wp=\"http://www.w3.org\""
@@ -39,36 +40,26 @@ sub parseFile {
   close $fileHandle;
   close $tmpHandle;
 
-  print "Generating temporary xml file: $tmpFile\n";
+  print "Generating temporary xml file: $tmpFile\n" if ($DEBUG);;
 
   my $data = $xml->XMLin($tmpFile);
 
-  unlink $tmpFile;
+  unlink $tmpFile if ($DEBUG);
 
   return $data;
-}
-
-sub stripCDATA {
-  my $string = shift;
-
-  if ($string =~ /^<!\[CDATA\[(.*)\]\]$/) {
-    $string =~ s/^<!\[CDATA\[(.*)\]\]$/$1/;
-  }
-
-  return $string;
 }
 
 sub convertContent {
   my $content = shift;
 
+  my $html = $content;
+
   my $tempHTML = `mktemp`;
   chomp($tempHTML);
 
-  print "Generating html file: $tempHTML\n";
+  print "Generating html file: $tempHTML\n" if ($DEBUG);
 
-  my $html = stripCDATA($content);
-
-  $html =~ s/[\x80-\xff]//g;
+  #$html =~ s/[\x01-\x03\x05-\x08\x10-\x19\x80-\xff]//g;
 
   open my $htmlHandle, ">", $tempHTML or die "$!";
   print $htmlHandle $html;
@@ -76,7 +67,7 @@ sub convertContent {
 
   my $results = `python $htmlToText < $tempHTML`;
 
-	# unlink $tempHTML;
+	unlink $tempHTML if ($DEBUG);;
 
   return $results;
 }
@@ -94,13 +85,23 @@ sub convertDate {
 sub writeMetaData {
   my ($data, $file, $pubDate) = @_;
 
-  print $file "---\nlayout: post\ntitle: \"$data->{title}\"\ndate: ";
-  print $file $pubDate->ymd() . " " . $pubDate->hour . ":" . $pubDate->minute;
-  print $file "\ncomments: true\ncategories: \n";
+  my $date = $pubDate->ymd() . " " . $pubDate->hour . ":" . $pubDate->minute;
+
+  my $categories = "";
   foreach my $category (@{$data->{category}}) {
-    print $file "- " . (ref($category) eq "HASH" ? $category->{content} : $category) . "\n";
+    next if (ref($category) ne "HASH"); # fixes duplicate Uncategorized bug
+    $categories .= "- $category->{content}\n";
   }
-  print $file "---\n";
+
+  print $file qq{---
+layout: post
+title: "$data->{title}"
+date: $date
+comments: true
+categories: 
+$categories
+---
+};
 }
 
 sub createPostFile {
@@ -130,7 +131,7 @@ foreach my $folder (@postFolders) {
   my @files = File::Find::Rule->file()->name('*.xml')->maxdepth(1)->in($folder);
 
   foreach my $file (@files) {
-
+    print "Found file: $file\n" if ($DEBUG);
     my $data = parseFile($file);
 
     my $markdown = convertContent($data->{"content:encoded"});
@@ -144,5 +145,7 @@ foreach my $folder (@postFolders) {
     print $postFile "\n$markdown";
 
     close $postFile;
+
+    print "Generated post for $data->{title}\n";
   }
 }
